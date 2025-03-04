@@ -1,0 +1,717 @@
+
+
+```{r eval=F}
+install.packages("ggpattern")
+update.packages("ggplot2")
+remove.packages("rlang")
+install.packages("rlang")
+install.packages("scales")
+install.packages("colorspace")
+```
+
+
+```{r}
+D_1 <- read_excel("FinalDf.xlsx") %>%
+  group_by(Participant, Trial, Position, Measure, Task, Time, Sign) %>%
+  mutate(XYZ = mean(value)) %>%
+  mutate(SumXYZ = mean(XYZ)) %>%
+  filter(ToT > 9) 
+  
+ 
+D_2 <- D_1 %>% filter(Time == 1) %>%   ## SumValue without aggregation
+  select(-value, -Time, -SumMovement, -Movement, -XYZ, -SumXYZ) %>%
+  pivot_wider(names_from = Measure, values_from = SumValue) %>%
+  mutate(Velocity = if_else(is.na(Velocity) & Participant == 12, 0.02488166, Velocity)) %>%
+  mutate(Velocity = if_else(is.na(Velocity) & Participant == 17, 0.00502671, Velocity)) %>%
+  mutate(ConWall = as.numeric(ConWall))
+```
+
+
+```{r}
+library(rlang)
+library(vctrs)
+library(tidyverse)
+library(brms)
+library(bayr)
+library(readxl)
+library(data.table)
+library(rstan)
+library(dplyr)
+library(boot)
+library(ctsem)
+library(stringr)
+library(writexl)
+library(StanHeaders)
+library(tidytext)
+library(zoo)
+library(clipr)
+library(patchwork)
+library(gghighlight)
+library(ggradar)
+library(HDInterval)
+library(bbplot)
+library(xtable)
+library(ggpattern)
+library(scales)
+library(colorspace)
+#pacman::p_load_gh("bbc/bbplot")
+```
+
+```{r}
+saveRDS(M_1, file = "M_1.rds")
+M_1 <- readRDS(file = "M_1.rds")
+```
+
+
+Multivariate Model – Acceleration and Velocity 
+```{r} 
+bf_Acc <- bf(Acceleration ~ Proficiency * (PosAxis + Task)) + exgaussian() 
+bf_Vel <- bf(Velocity ~ Proficiency * (PosAxis + Task)) + exgaussian() 
+bf_Jerk <- bf(Jerk ~ Proficiency * (PosAxis + Task)) + exgaussian() 
+ 
+M_1 <- D_2 %>% 
+  unite(PosAxis, c(Position, Axis), remove = FALSE) %>% 
+  mutate(PosAxis = factor(PosAxis, levels = c("Hand_X", "Hand_Y", "Hand_Z" , "FoArm_X", "FoArm_Y", "FoArm_Z", "UpArm_X", "UpArm_Y", "UpArm_Z"))) %>%   
+  mutate(Task = as.factor(Task), 
+        Acceleration = Acceleration * 100,         
+        Velocity = Velocity * 100,
+        Jerk = Jerk * 100) %>% 
+  brm(bf_Acc + bf_Vel + bf_Jerk + set_rescor(FALSE), data = ., chains = 6, cores = 6, iter = 3000, warmup = 1500, inits = 0)  
+``` 
+
+```{r}
+posterior_samples <- posterior_samples(M_1)
+
+median_values <- apply(posterior_samples, 2, median)
+median_table <- data.frame(Parameter = names(median_values), Median = median_values) 
+rownames(median_table) <- NULL
+
+
+crebility_values <- hdi(posterior_samples, prob = 0.95)
+crebility_names <- colnames(crebility_values)
+credibility_table <- data.frame(Parameter = crebility_names,
+                     Lower_Bound = crebility_values[1, ],
+                     Upper_Bound = crebility_values[2, ])
+rownames(credibility_table) <- NULL
+
+T_M_1 <- median_table %>% left_join(credibility_table) %>%
+  filter(row_number() <= n()-8) %>%
+  separate(Parameter, into = c("b", "Rest"), sep = "b_") %>%   
+  separate(Rest, into = c("DV", "Rest", "BodyDir"), sep = "_") %>%   
+  mutate(Rest = if_else(str_detect(Rest, "Proficiency"), Rest, paste0("ProficiencyExpert:", Rest))) %>% 
+  separate(Rest, into = c("Proficiency", "IV"), sep = ":") %>%   
+  mutate(IV = if_else(is.na(IV), "Intercept", IV)) %>%   
+  mutate(Proficiency = gsub("Proficiency", "",Proficiency)) %>%   
+  select(-b) %>%   
+  mutate(IV = gsub("PosAxis", "", IV)) %>% 
+  mutate(BodyDir = if_else(!is.na(BodyDir), paste(IV, BodyDir), BodyDir)) %>% 
+  mutate(BodyDir = gsub(" ", "_", BodyDir)) %>% 
+  mutate(IV = if_else(!is.na(BodyDir), "PosAxis", IV)) %>% 
+  mutate(BodyDir = if_else(is.na(BodyDir) & IV == "Intercept", "Hand_X", BodyDir)) %>%
+  rename(center = Median, lower = Lower_Bound, upper = Upper_Bound)
+
+```
+
+Tibbles 
+
+```{r} 
+Estimates <- c("center_Expert", "center_Intermediate", "center_Novice", "lower_Expert", "lower_Intermediate", "lower_Novice", "upper_Expert", "upper_Intermediate", "upper_Novice") 
+ 
+T_M_2 <- T_M_1 %>% 
+  filter(IV != "Task3") %>%
+  pivot_wider(names_from = Proficiency, values_from = c(center, lower, upper)) %>% 
+  mutate(across(center_Intermediate:center_Novice,~.+center_Expert)) %>%   
+  mutate(across(lower_Intermediate:lower_Novice,~.+center_Expert)) %>%
+  mutate(across(upper_Intermediate:upper_Novice,~.+center_Expert)) %>%   
+  pivot_longer(Estimates, names_to = "Estimate") %>%
+  
+  separate(Estimate, into = c("Estimate", "Proficiency")) %>%   
+  pivot_wider(names_from = Estimate, values_from = value) 
+``` 
+
+Table to copy
+
+```{r}
+EstimatesTask <- c("center_T1", "center_T2", "lower_T1", "lower_T2", "upper_T1", "upper_T2")
+Estimates <- c("center_Expert", "center_Intermediate", "center_Novice", "lower_Expert", "lower_Intermediate", "lower_Novice", "upper_Expert", "upper_Intermediate", "upper_Novice") 
+
+CT_M_1 <- T_M_1 %>% 
+  mutate(BodyDir = if_else(is.na(BodyDir), "Hand_X", BodyDir)) %>%
+  filter(BodyDir == "Hand_X") %>%
+  mutate(Task = if_else(str_detect(IV, "Task3") & !is.na(IV), "T2", "T1")) %>%
+  select(-IV,-BodyDir) %>%
+  
+  pivot_wider(names_from = Task, values_from = c(center, lower, upper)) %>%
+  
+  mutate(center_T2 = center_T1 + center_T2,
+         lower_T2 = lower_T1 + lower_T2,
+        upper_T2 = upper_T1 + upper_T2) %>%
+   pivot_longer(EstimatesTask, names_to = "Estimates") %>%
+  separate(Estimates, into = c("CLU", "Task"), sep = "_") %>%
+  pivot_wider(names_from = CLU, values_from = value) %>%
+  mutate(across(center:upper,~round(., 2))) %>%
+  pivot_wider(names_from = DV, values_from = c(center, lower, upper)) %>%
+  mutate(Empty1 = "",
+         Empty2 = "")
+  
+
+CT_M_1 <- CT_M_1[order(CT_M_1$Task),] 
+
+
+CT_M_1 <- CT_M_1[, c(1, 2, 4, 7, 10, 12, 3, 6, 9, 13, 5, 8, 11)] %>%
+  select(-Task)
+
+print(xtable(CT_M_1, type = "latex"))
+```
+
+
+Visual Analysis 
+
+```{r}
+make_radar_chart <- function(dframe, Bodypart, Movement, PointSize, LineWidth, Mlpl, Pace, GLO) {
+  Radar_Df <- dframe %>%  
+  filter(IV == "PosAxis" | IV == "Intercept") %>%   
+  select(-lower, -upper, -IV) %>% 
+  pivot_wider(names_from = BodyDir, values_from = center) %>%   
+  mutate(across(Hand_Y:UpArm_Z,~.+Hand_X)) %>% 
+  pivot_longer(c("Hand_X", "Hand_Y", "Hand_Z", "FoArm_X", "FoArm_Y", "FoArm_Z", "UpArm_X", "UpArm_Y", "UpArm_Z"), names_to = "BodyDir") %>%   
+  separate(BodyDir, into =  c("Position", "Direction")) %>%
+  mutate(Direction = paste0(Direction, "Axis")) %>%
+  pivot_wider(names_from = Direction, values_from = value) %>%
+  filter(DV == Movement & Position == Bodypart) %>%
+  select(-DV, -Position) %>%
+  rename(group = Proficiency) 
+  
+  Radar_Df <- Radar_Df[, c(1, 4, 3, 2)]
+  
+ 
+  max_radar <- Radar_Df %>% mutate(Max = pmax(XAxis, YAxis, ZAxis))
+  max_radar <- as.vector(max_radar['Max'])
+  max_radar <- max(max_radar$Max) 
+  
+  
+  min_radar <- Radar_Df %>% mutate(Min = pmin(XAxis, YAxis, ZAxis)) 
+  min_radar <- as.vector(min_radar['Min'])
+  min_radar <- min(min_radar$Min)
+  
+  Radar_Df[2:4] <- Radar_Df[2:4] - min_radar
+  
+
+  max_grid <- Radar_Df %>% mutate(Max = pmax(XAxis, YAxis, ZAxis))
+  max_grid <- as.vector(max_grid['Max'])
+  max_grid <- max(max_grid$Max) 
+  
+  min_grid <- Radar_Df %>% mutate(Min = pmin(XAxis, YAxis, ZAxis)) 
+  min_grid <- as.vector(min_grid['Min'])
+  min_grid <- min(min_grid$Min)
+  
+  Radar_Df <- Radar_Df %>% rename("X-Axis" = XAxis, "Y-Axis" = YAxis, "Z-Axis" = ZAxis)
+
+  
+  Radar_Df %>% 
+    ggradar(
+      values.radar = c(round(min_radar, digits = Pace) * Mlpl, round( (max_radar+min_radar)/2, digits = Pace) * Mlpl,     round(max_radar, digits = Pace) * Mlpl),
+      grid.min =  min_grid, #round(min, digits = 2),
+      grid.mid =  (max_grid + min_grid) / 2, #round( (max+min)/2, digits = 2), 
+      grid.max =  max_grid, #round(max, digits = 5) + 0.1,
+      
+      group.point.size = PointSize, # 3 or 1
+      group.line.width = LineWidth, # 0.75 or 0.25
+      gridline.label.offset = GLO,
+      gridline.mid.colour = "grey",
+      legend.title = "Proficiency",
+      
+      
+      group.colours = c("brown1", "darkgreen", "blue4"))
+}
+```
+
+
+
+```{r}
+Radar <- ggarrange(make_radar_chart(T_M_2, "Hand", "Velocity", 3, 0.75, 1, 1, -0.09),
+                   make_radar_chart(T_M_2, "FoArm", "Velocity", 3, 0.75, 1, 1, -0.09),
+                   make_radar_chart(T_M_2, "UpArm", "Velocity", 3, 0.75, 1, 1, -0.09),
+                   
+                   make_radar_chart(T_M_2, "Hand", "Acceleration", 3, 0.75, 1, 0, -0.5),
+                   make_radar_chart(T_M_2, "FoArm", "Acceleration", 3, 0.75, 1, 0, -0.5),
+                   make_radar_chart(T_M_2, "UpArm", "Acceleration", 3, 0.75, 1, 0, -0.5),
+                   
+                   make_radar_chart(T_M_2, "Hand", "Jerk", 3, 0.75, 1, 0, -0.5),
+                   make_radar_chart(T_M_2, "FoArm", "Jerk", 3, 0.75, 1, 0, -0.5),
+                   make_radar_chart(T_M_2, "UpArm", "Jerk", 3, 0.75, 1, 0, -0.5),
+                     
+                   
+          labels = c("Velocity- Hand", "Velocity - Forearm", "Velocity - Upper arm",
+                     "Acceleration - Hand", "Acceleration - Forearm", "Acceleration - Upper arm",
+                      "Jerk - Hand", "Jerk - Forearm", "Jerk - Upper arm"),
+                    
+          ncol = 3, nrow = 3,
+          common.legend = TRUE, 
+          legend = "right",
+          font.label = list(size = 14, color = "black", face = "plain", family = NULL))
+
+finalise_plot(plot_name = Radar,
+              source = "Source: RadarPlot",
+              save_filepath = "RadarPlot.png", 
+              width_pixels = 1600,
+              height_pixels = 900)
+```
+
+
+
+
+Multivariate Model – Tot, ConWall and TimeWall 
+
+```{r}
+saveRDS(M_2, file = "M_2.rds")
+M_2 <- readRDS(file = "M_2.rds")
+```
+
+ 
+```{r} 
+bf_ToT <- bf(ToT | subset(Sub1) ~ Proficiency * (Task + SumJerk)) + exgaussian() 
+bf_TimeWall <- bf(TimeWall | subset(Sub1) ~ Proficiency * (Task + Task:CenToT + SumJerk)) + hurdle_gamma() 
+bf_ConWall <- bf(ConWall | subset(Sub2) ~ Proficiency * (CenToT + SumJerk)) + negbinomial() 
+ 
+M_2 <- D_2 %>% 
+  group_by(Task, Proficiency, Participant, Trial) %>%   
+  mutate(SumAcc = mean(Acceleration) * 100,           
+         SumVel = mean(Velocity) * 100,
+         SumJerk = mean(Jerk) * 100) %>%  
+  
+  ungroup() %>% 
+  
+  group_by(Proficiency, Task, Trial) %>%
+  mutate(SumVel = SumVel - mean(SumVel)) %>% 
+  mutate(SumAcc = SumAcc - mean(SumAcc)) %>% 
+  mutate(SumJerk = SumJerk - mean(SumJerk)) %>% 
+  
+  mutate(CenToT = ToT - mean(ToT)) %>% 
+  
+  ungroup() %>% 
+   
+  group_by(Participant, Task) %>% 
+  mutate(Sub1 = if_else(duplicated(ToT), 0, 1)) %>% 
+  mutate(Sub2 = if_else(duplicated(ConWall) | Task == 3, 0, 1)) %>%   
+  ungroup() %>% 
+   
+  unite(PosAxis, c(Position, Axis), remove = FALSE) %>% 
+  mutate(PosAxis = factor(PosAxis, levels = c("Hand_X", "Hand_Y", "Hand_Z" , "FoArm_X", "FoArm_Y", "FoArm_Z", "UpArm_X", "UpArm_Y", "UpArm_Z"))) %>% 
+   
+  mutate(Task = as.factor(Task),          
+         ConWall = as.integer(ConWall), 
+         TimeWall = as.numeric(TimeWall), 
+         TimeWall = TimeWall + 1) %>% 
+   
+  brm(bf_ToT + bf_ConWall + bf_TimeWall + set_rescor(FALSE), data = ., chains = 6, cores = 6, iter = 4000, warmup = 2000, init = 0, control = list(adapt_delta = 0.8)) 
+``` 
+ 
+```{r}
+posterior_samples2 <- posterior_samples(M_2)
+
+median_values2 <- apply(posterior_samples2, 2, median)
+median_table2 <- data.frame(Parameter = names(median_values2), Median = median_values2) 
+rownames(median_table2) <- NULL
+
+
+crebility_values2 <- hdi(posterior_samples2, prob = 0.95)
+crebility_names2 <- colnames(crebility_values2)
+credibility_table2 <- data.frame(Parameter = crebility_names2,
+                     Lower_Bound = crebility_values2[1, ],
+                     Upper_Bound = crebility_values2[2, ])
+rownames(credibility_table2) <- NULL
+```
+ 
+ 
+```{r}
+Estimates <- c("center_Expert", "center_Intermediate", "center_Novice", "lower_Expert", "lower_Intermediate", "lower_Novice", "upper_Expert", "upper_Intermediate", "upper_Novice") 
+ 
+ 
+T_M_4 <- median_table2 %>% left_join(credibility_table2) %>% 
+  separate(Parameter, into = c("b", "Rest"), sep = "b_") %>%   separate(Rest, into = c("DV", "Rest"), sep = "_") %>% 
+  mutate(Rest = if_else(str_detect(Rest, "Proficiency"), Rest, paste0("ProficiencyExpert:", Rest))) %>% 
+  separate(Rest, into = c("Proficiency", "IV", "Task"), sep = ":") %>%   
+  mutate(Task2 = Task) %>%
+  
+  mutate(Task = if_else(str_detect(IV, "Task3") & !is.na(IV), "T2", "T1")) %>%
+  mutate(IV = if_else(!is.na(Task2), "CenToT", IV)) %>%
+  mutate(IV = if_else(IV == "Task3" | is.na(IV), "Intercept", IV)) %>%  
+  mutate(Proficiency = gsub("Proficiency", "", Proficiency)) %>%   
+  rename(center = Median, lower = Lower_Bound, upper = Upper_Bound) %>%
+  select(DV, Proficiency, IV, Task, center, lower, upper) %>% 
+  mutate(DV = factor(DV, levels = c("ToT", "ConWall", "TimeWall")))
+  
+``` 
+
+```{r} 
+Estimates <- c("center_Expert", "center_Intermediate", "center_Novice", "lower_Expert", "lower_Intermediate", "lower_Novice", "upper_Expert", "upper_Intermediate", "upper_Novice") 
+
+T_M_5 <- T_M_4 %>% 
+  filter(row_number() <= n()-7) %>%
+  pivot_wider(names_from = Proficiency, values_from = c(center, lower, upper)) %>% 
+  mutate(across(center_Intermediate:center_Novice,~.+center_Expert)) %>%   
+  mutate(across(lower_Intermediate:lower_Novice,~.+center_Expert)) %>%   
+  mutate(across(upper_Intermediate:upper_Novice,~.+center_Expert)) %>%   
+  pivot_longer(Estimates, names_to = "Estimate") %>%   
+  separate(Estimate, into = c("Estimate", "Proficiency")) %>%   
+  pivot_wider(names_from = Estimate, values_from = value) %>%   
+  pivot_longer(c(center, lower, upper), names_to = "Estimate") %>%   
+  mutate(value = if_else(DV != "ToT", exp(value), value)) %>%   
+  pivot_wider(names_from = Estimate, values_from = value) 
+``` 
+
+
+Table to copy
+
+```{r}
+EstimatesTask <- c("center_T1", "center_T2", "lower_T1", "lower_T2", "upper_T1", "upper_T2")
+
+CT_M_5 <- T_M_4 %>%
+  filter(row_number() <= n()-7) %>%
+  pivot_wider(names_from = Task, values_from = c(center, lower, upper)) %>%
+  mutate(center_T2 = if_else(!is.na(center_T2), center_T1 + center_T2, center_T2),
+         lower_T2 = if_else(!is.na(lower_T2), lower_T1 + lower_T2, lower_T2),
+        upper_T2 = if_else(!is.na(upper_T2), upper_T1 + upper_T2, upper_T2)) %>%
+  pivot_longer(EstimatesTask, names_to = "Estimates") %>%
+  separate(Estimates, into = c("CLU", "Task"), sep = "_") %>%
+  pivot_wider(names_from = CLU, values_from = value) %>%
+  na.omit() %>%
+  filter(IV == "Intercept") %>%
+  pivot_longer(c(center, lower, upper), names_to = "Estimate") %>%   
+  mutate(value = if_else(DV != "ToT", exp(value), value)) %>%   
+  pivot_wider(names_from = Estimate, values_from = value) %>%
+  mutate(across(center:upper,~round(., 2))) %>%
+  pivot_wider(names_from = DV, values_from = c(center, lower, upper)) %>%
+  select(-IV) %>%
+  mutate(Empty1 = "",
+         Empty2 = "")
+  
+  
+CT_M_5 <- CT_M_5[order(CT_M_5$Task),] 
+
+CT_M_5 <- CT_M_5[, c(1, 2, 3, 6, 9, 12, 5, 8, 11, 13, 4, 7, 10)] %>%
+  select(-Task) %>%
+  
+  
+print(xtable(CT_M_5, type = "latex"))
+```
+
+
+
+Visual Analysis 
+
+
+Acceleration and Velocity as Slopes
+
+```{r}
+Effect_Move <- function (dframe, DepV, YLabel, XLabel, miny, maxy, tickrate) {
+  
+  IV_labs <- c("Jerk")
+  names(IV_labs) <- c("SumJerk")
+  
+  dframe %>%    
+  select(-lower, -upper) %>% 
+  filter((IV == "SumJerk" | IV == "Intercept") & DV == DepV & Task == "T1") %>%   
+  pivot_wider(names_from = IV, values_from = center) %>% 
+  #mutate(SumAcc = if_else(DV != "ToT", Intercept * (SumAcc - 1), SumAcc)) %>% 
+  #mutate(SumVel = if_else(DV != "ToT", Intercept * (SumVel - 1), SumVel)) %>%
+  mutate(SumJerk = if_else(DV != "ToT", Intercept * (SumJerk - 1), SumJerk)) %>% 
+  pivot_longer(c("Intercept", "SumJerk"), names_to = "IV") %>%   
+  filter(IV != "Intercept") %>% 
+  
+  ggplot(aes(x = Proficiency, y = value, color = Proficiency)) +   
+  geom_point(size = 3) +
+  geom_segment(aes(xend= Proficiency, y = 0, yend = value, color = Proficiency)) +
+  theme(strip.text = element_text(size = 3)) + 
+  facet_wrap(~IV,
+             labeller = labeller(IV = IV_labs)) +
+  ylab(YLabel) + 
+  xlab(XLabel) +
+  scale_y_continuous(breaks = seq(min(miny), max(maxy), by = tickrate)) +
+  theme(axis.text.x = element_text(angle = 20, vjust = 0.7, hjust=0.6),
+        panel.spacing = unit(6, "lines")) +
+  bbc_style_R() 
+}
+```
+
+```{r}
+AccVel_Slope <- ggarrange(Effect_Move(T_M_5, "ToT", "Time on Task in Seconds", "Time on Task", -2, 2, 0.05),
+                   Effect_Move(T_M_5, "TimeWall", "Time in Contact in Percentage", "Time in Contact", -1, 2, 0.05),
+                          Effect_Move(T_M_5, "ConWall", "Number of Contacts", "Number of Contacts", 0, 0.3, 0.02),
+                   
+                
+                   
+          labels = c("Slope Effects of:", "Slope Effects of:", "Slope Effects of:"),
+                    
+          ncol = 3, nrow = 1,
+          widths = (c(1.5, 1.5, 1.5)),
+          common.legend = TRUE, 
+          legend = "right",
+          font.label = list(size = 14, color = "black", face = "plain", family = NULL))
+
+finalise_plot(plot_name = AccVel_Slope,
+              source = "Source: AccVel",
+              save_filepath = "AccVel_Slope.png", 
+              width_pixels = 1600,
+              height_pixels = 900)
+
+```
+
+
+Intercept Proficiency - Task 1
+
+```{r}
+NamesDV <- c("Task 1")
+names(NamesDV) <- c("ConWall")
+
+ConWall <- T_M_5 %>%
+    select(-lower, -upper) %>%  
+    filter(DV == "ConWall" & IV == "Intercept") %>%
+    
+    ggplot(aes(x = Proficiency, y = center)) +
+    geom_bar(aes(fill = DV), stat="summary", width = 0.9) +
+    theme(aspect.ratio = 3/1) +
+    scale_colour_manual(values=c("green")) +
+    scale_fill_manual(values=c("darkviolet")) +
+    scale_alpha_manual(values=c(.3)) +
+    #facet_wrap("Measure", scales = "free") +
+    
+    scale_y_continuous(breaks = scales::pretty_breaks(n = 10)) +
+
+    xlab("") +
+    ylab("Number of Contacts") +
+    facet_wrap("DV", scale = "free_y",
+    labeller = labeller(DV = NamesDV)) +
+    theme(axis.text.x = element_text(angle = 20, vjust = 1.3, hjust=0.6)) +
+    guides(fill=guide_legend(title="Performance Measures")) +
+    bbc_style_R()
+
+finalise_plot(plot_name = ConWall,
+  source = "Source: Contacts with Wall",
+  save_filepath = "ConWall.png",
+  width_pixels = 600,
+  height_pixels = 500)
+```
+
+
+Intercept Proficiency - Task 3
+
+```{r}
+NamesIV = c("Task 1", "Task 3")
+names(NamesIV) <- c("Intercept", "T3")
+
+TimeToT <- T_M_5 %>%
+  select(-lower, -upper) %>% 
+  filter((IV == "Intercept")) %>% 
+  pivot_wider(names_from = Task, values_from = center) %>%
+  mutate(T2 = if_else(DV == "ToT", T1 + T2, T1 * T2)) %>%
+  pivot_longer(c("T1", "T2"), names_to = "Task") %>%
+  pivot_wider(names_from = DV, values_from = value) %>% 
+  mutate(ConWall = 0) %>%
+ 
+  mutate(TimeWall = ToT * (TimeWall/100),
+         ToT = ToT - TimeWall) %>%
+  pivot_longer(c(ToT, TimeWall, ConWall), names_to = "DV") %>%
+  mutate(DV = if_else(DV == "ToT", "Time on Task", 
+                      if_else(DV == "TimeWall", "Time in Contact","Wall Contacts"))) %>%
+  mutate(Task = if_else(Task == "T1", "Task 1", "Task 2")) %>% 
+  
+  ggplot(aes(x = Proficiency, y = value, fill = DV, order = DV)) + 
+  geom_bar(stat="identity", position = position_stack(reverse = TRUE)) +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 10)) +
+  scale_fill_manual(values=c("darkgreen", "darkblue", "darkviolet")) +
+  facet_wrap("Task", scale = "free_y",
+             labeller = labeller(IV = NamesIV)) +
+  xlab("") +
+  ylab("Seconds") +
+  theme(axis.text.x = element_text(angle = 20, vjust = 1.3, hjust=0.6)) +
+  guides(fill=guide_legend(title="Performance Measures")) +
+  bbc_style_R()
+
+finalise_plot(plot_name = TimeToT,
+              source = "Source: WallToT",
+              save_filepath = "WallToT.png", 
+              width_pixels = 800,
+              height_pixels = 600)
+```
+
+```{r}
+PM <- ggarrange(TimeToT, ConWall, 
+          labels = c("1", "2"),
+          ncol = 2, nrow = 1,
+          common.legend = TRUE, 
+          legend = "right")
+
+
+finalise_plot(plot_name = PM,
+              source = "Source: Performance",
+              save_filepath = "Performance.png", 
+              width_pixels = 1600,
+              height_pixels = 900)
+```
+
+
+ToT Effect on Performance
+
+```{r}
+NamesDV = c("Contacts with wall", "Time in contact with wall in percentage")
+names(NamesDV) <- c("ConWall", "TimeWall")
+
+ToTSlope_CW <- T_M_5 %>%
+ filter((IV == "CenToT" | IV == "Intercept") & DV == "ConWall")  %>%
+ select(-lower, -upper, -Task) %>% 
+  pivot_wider(names_from = IV, values_from = center) %>%
+  slice(rep(1:n(), each = 25)) %>%
+  group_by(Proficiency) %>%
+  mutate(x = -12:12,
+         y = Intercept + (Intercept * CenToT - Intercept) * x,
+         Intercept = as.factor(Intercept)) %>%
+  ungroup() %>%
+  
+  ggplot(aes(x = x, y = y, color = Proficiency)) +
+  geom_line(size = 1.2) +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 10)) +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 10)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "purple") +
+  xlab("Distance from the population mean in seconds") +
+  ylab("Number of wall contacts") +
+  #facet_wrap(Proficiency, scales = "free",
+             #labeller = labeller(DV = NamesDV)) +
+  bbc_style_R()
+```
+
+
+```{r}
+NamesDV = c("Contacts with wall", "Time in contact with wall in percentage")
+names(NamesDV) <- c("ConWall", "TimeWall")
+
+ToTSlope_TW <- T_M_5 %>%
+ filter((IV == "CenToT" | IV == "Intercept") & (DV != "ToT" & DV != "ConWall"))  %>%
+ select(-lower, -upper) %>% 
+ 
+  pivot_wider(names_from = Task, values_from = center) %>% 
+  mutate(T2 = if_else(is.na(T2), 0, T2)) %>%
+  mutate(T2 = if_else(IV == "Intercept", T1 * T2, T2)) %>%
+  
+  pivot_longer(c("T1", "T2"), names_to = "Task") %>%
+  pivot_wider(names_from = IV, values_from = value) %>%
+  filter(!(Task == "T2" & DV == "ConWall")) %>%
+  mutate(Task = if_else(Task == "T1", "Task 1", "Task 2")) %>%
+  
+  slice(rep(1:n(), each = 25)) %>%
+  group_by(Proficiency, DV, Task) %>%
+  mutate(x = -12:12,
+         y = Intercept + (Intercept * CenToT - Intercept) * x,
+         Intercept = as.factor(Intercept)) %>%
+  ungroup() %>%
+  
+  ggplot(aes(x = x, y = y, color = Proficiency, linetype = Task)) +
+  geom_line(size = 1.2) +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 10)) +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 10)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "purple") +
+  xlab("Distance from the population mean in seconds") +
+  ylab("Time in contact with wall in percentage") +
+  #facet_wrap(Proficiency, scales = "free",
+             #labeller = labeller(DV = NamesDV)) +
+  bbc_style_R()
+```
+
+```{r}
+ToTslope <- ggarrange(ToTSlope_TW, ToTSlope_CW, 
+          labels = c("1", "2"),
+          ncol = 2, nrow = 1,
+          common.legend = TRUE, 
+          legend = "right")
+
+
+finalise_plot(plot_name = ToTslope,
+              source = "Source: ToTSlope",
+              save_filepath = "Performance.png", 
+              width_pixels = 1600,
+              height_pixels = 900)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+make_radar_chart <- function(dframe, Bodypart, Movement, PointSize, LineWidth, Mlpl, Pace, GLO) {
+  Radar_Df <- dframe %>%  
+  filter(IV == "PosAxis" | IV == "Intercept") %>%   
+  select(-lower, -upper, -IV) %>% 
+  pivot_wider(names_from = BodyDir, values_from = center) %>%   
+  mutate(across(Hand_Y:UpArm_Z,~.+Hand_X)) %>% 
+  pivot_longer(c("Hand_X", "Hand_Y", "Hand_Z", "FoArm_X", "FoArm_Y", "FoArm_Z", "UpArm_X", "UpArm_Y", "UpArm_Z"), names_to = "BodyDir") %>%   
+  separate(BodyDir, into =  c("Position", "Direction")) %>%
+  mutate(Direction = paste0(Direction, "Axis")) %>%
+  pivot_wider(names_from = Direction, values_from = value) %>%
+  filter(DV == Movement & Position == Bodypart) %>%
+  select(-DV, -Position) %>%
+  rename(group = Proficiency) 
+  
+  Radar_Df <- Radar_Df[, c(1, 4, 3, 2)]
+  
+ 
+  max_radar <- Radar_Df %>% mutate(Max = pmax(XAxis, YAxis, ZAxis))
+  max_radar <- as.vector(max_radar['Max'])
+  max_radar <- max(max_radar$Max) 
+  
+  
+  min_radar <- Radar_Df %>% mutate(Min = pmin(XAxis, YAxis, ZAxis)) 
+  min_radar <- as.vector(min_radar['Min'])
+  min_radar <- min(min_radar$Min)
+  
+  Radar_Df[2:4] <- Radar_Df[2:4] - min_radar
+  
+
+  max_grid <- Radar_Df %>% mutate(Max = pmax(XAxis, YAxis, ZAxis))
+  max_grid <- as.vector(max_grid['Max'])
+  max_grid <- max(max_grid$Max) 
+  
+  min_grid <- Radar_Df %>% mutate(Min = pmin(XAxis, YAxis, ZAxis)) 
+  min_grid <- as.vector(min_grid['Min'])
+  min_grid <- min(min_grid$Min)
+  
+  Radar_Df <- Radar_Df %>% rename("X-Axis" = XAxis, "Y-Axis" = YAxis, "Z-Axis" = ZAxis)
+
+  
+  Radar_Df %>% 
+    ggradar(
+      values.radar = c(round(min_radar, digits = Pace) * Mlpl, round( (max_radar+min_radar)/2, digits = Pace) * Mlpl,     round(max_radar, digits = Pace) * Mlpl),
+      grid.min =  min_grid, #round(min, digits = 2),
+      grid.mid =  (max_grid + min_grid) / 2, #round( (max+min)/2, digits = 2), 
+      grid.max =  max_grid, #round(max, digits = 5) + 0.1,
+      
+      group.point.size = PointSize, # 3 or 1
+      group.line.width = LineWidth, # 0.75 or 0.25
+      gridline.label.offset = GLO,
+      gridline.mid.colour = "grey",
+      legend.title = "Proficiency",
+      
+      
+      group.colours = c("brown1", "darkgreen", "blue4"))
+}
+```

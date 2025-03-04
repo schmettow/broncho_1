@@ -1,0 +1,345 @@
+---
+output:
+  word_document: default
+  html_document: default
+  pdf_document: default
+---
+
+```{r eval=F}
+install.packages('data.table')
+install.packages("tidyverse", dependencies=TRUE)
+install.packages('brms')
+install.packages('readODS')
+install.packages('readxl')
+install.packages('rstanarm')
+install.packages("dplyr")
+install.packages("ggplot2")
+install.packages("StanHeaders")
+install.packages("rstan", repos = c("https://mc-stan.org/r-packages/", getOption("repos")))
+install.packages("boot")
+install.packages("stringr")
+install.packages('ctsem')
+install.packages("dbplyr")
+install.packages("writexl")
+install.packages("rgl")
+install.packages("tidytext")
+install.packages("zoo")
+install.packages("devtools")
+install.packages("processx")
+install.packages("rlang")
+install.packages("clipr")
+install.packages("vctrs")
+install.packages("rlang", dependencies = TRUE)
+install.packages("patchwork")
+install.packages("gghighlight")
+devtools::install_github('bbc/bbplot')
+install.packages("ggpubr")
+install.packages("plot3D")
+install.packages("rgl")
+install.packages("fmsb")
+devtools::install_github("ricardo-bion/ggradar")
+install.packages("ggiraphExtra")
+install.packages("HDInterval")
+install.packages("xtable")
+```
+
+```{r}
+remove.packages(c("StanHeaders", "rstan"))
+install.packages("rstan", repos = c("https://mc-stan.org/r-packages/", getOption("repos")))
+```
+
+
+```{r}
+install.packages("devtools") # run once
+devtools::install_github("schmettow/mascutils", force = TRUE)1
+devtools::install_github("schmettow/bayr", force = TRUE)
+```
+
+
+```{r}
+D1 <- read_excel("Platform validation 2", sheet = 1)
+```
+
+
+```{r}
+library(rlang)
+library(vctrs)
+library(tidyverse)
+library(brms)
+library(bayr)
+library(readxl)
+library(data.table)
+library(rstan)
+library(dplyr)
+library(boot)
+library(ctsem)
+library(stringr)
+library(writexl)
+library(StanHeaders)
+library(tidytext)
+library(zoo)
+library(clipr)
+library(patchwork)
+library(gghighlight)
+library(bbplot)
+library(ggpubr)
+```
+
+
+
+##Data Manipulation of Original Data Sets + ## Creating the Final Data
+
+```{r}
+outcome_vars <- c("RH_X", "RH_Y", "RH_Z", "RUA_X",	"RUA_Y",	"RUA_Z", "RFA_X",	"RFA_Y",	"RFA_Z",	"RH_X",	"RH_Y",	"RH_Z",	"LUA_X",	"LUA_Y",	"LUA_Z",	"LFA_X",	"LFA_Y",	"LFA_Z",	"LH_X",	"LH_Y",	"LH_Z")
+
+RawData <- read_excel("AllDataSets.xlsx", sheet = 1) %>% 
+  pivot_longer(outcome_vars, names_to = "Sensor")
+
+RawData2 <- read_excel("AllDataSets.xlsx", sheet = 2) %>% 
+  pivot_longer(outcome_vars, names_to = "Sensor")
+
+#Turning the values to numeric
+RawData <- mutate(RawData, value = as.numeric(value))
+## for some data sets the values were defined as string or logical so this code turns them back into numeric 
+
+
+
+#Check if there are values above 1000000 or below -1000000
+filter(RawData, value > 1000 | value < -1000)
+## In case there are values above 1000000 or below -1000000, you need to run the section below
+
+
+
+Decimal <- function(x) {
+  ifelse(x >= 1000000, x/1000000, x*1)
+}
+
+DecimalN <- function(x) {
+  ifelse(x <= -1000000, x/1000000, x*1)
+}
+
+RawData <- mutate(RawData, value = Decimal(value))
+RawData <- mutate(RawData, value = DecimalN(value))
+## run this section if there are values above 1000000 or below -1000000
+## don't forget to run the segments containing the functions first (see above)
+```
+
+```{r}
+RawData <- RawData %>%
+  group_by(Participant, Trial, Task, Measure) %>%
+  mutate(RowLength = row_number()) 
+
+RawData <- RawData %>% 
+  group_by(Trial, Participant, Task, Measure) %>% 
+  mutate(AbsoluteLength = n()) 
+
+RawData <- RawData %>% 
+  group_by(Participant, Trial, Task, Measure) %>%
+  mutate(Time = if_else(RowLength <= n()/5, 1, 
+                        if_else(RowLength > n()%/%5 & RowLength <= n()%/%2.5, 2, 
+                        if_else(RowLength > n()%/%2.5 & RowLength <= n()%/%1.667, 3, 
+                        if_else(RowLength > n()%/%1.667 & RowLength <= n()%/%1.25, 4,
+                        if_else(RowLength > n()%/%1.25 & RowLength <= n(), 5, 10))))))
+
+
+#Extracting the mean value of each participant for the positive and negative movement
+options(digits = 8)
+options(max.print=100000)
+
+RawDataJerk <- RawData %>%
+  pivot_wider(names_from = Measure, values_from = value) %>%
+  mutate(Jerk2 = Acceleration) 
+
+Jerk2 <- diff(RawDataJerk$Jerk2)
+
+RawDataJerk <- RawDataJerk %>%
+  head(-1) 
+
+DataAVJ <- cbind(RawDataJerk, Jerk2)
+colnames(DataAVJ)[ncol(DataAVJ)] <- "Jerk"
+DataAVJ$Jerk2 <- NULL
+
+DataAVJ <- DataAVJ %>% 
+  pivot_longer(c("Acceleration", "Velocity", "Jerk"), names_to = "Measure") 
+  
+
+Neg <- filter(DataAVJ, value < 0)
+Pos <- filter(DataAVJ, value >= 0)
+
+
+Final1Neg <- aggregate(Neg$value, list(Neg$Participant, Neg$Trial, Neg$Task, Neg$Sensor, Neg$Measure, Neg$Time), mean)
+Final1Pos <- aggregate(Pos$value, list(Pos$Participant, Pos$Trial, Pos$Task, Pos$Sensor, Pos$Measure, Pos$Time), mean)
+
+Final1Neg <- rename(Final1Neg, Participant = Group.1, Trial = Group.2, Task = Group.3, Sensor = Group.4, Measure = Group.5, Time = Group.6, value = x)
+Final1Pos <- rename(Final1Pos, Participant = Group.1, Trial = Group.2, Task = Group.3, Sensor = Group.4, Measure = Group.5, Time = Group.6, value = x)
+
+Final1 <- rbind(Final1Neg, Final1Pos)
+```
+
+```{r}
+RawData2 <- RawData2 %>%
+  group_by(Participant, Trial, Task, Measure) %>%
+  mutate(RowLength = row_number()) 
+
+RawData2 <- RawData2 %>% 
+  group_by(Trial, Participant, Task, Measure) %>% 
+  mutate(AbsoluteLength = n()) 
+
+RawData2 <- RawData2 %>% 
+  group_by(Participant, Trial, Task, Measure) %>%
+  mutate(Time = if_else(RowLength <= n()/5, 1, 
+                        if_else(RowLength > n()%/%5 & RowLength <= n()%/%2.5, 2, 
+                        if_else(RowLength > n()%/%2.5 & RowLength <= n()%/%1.667, 3, 
+                        if_else(RowLength > n()%/%1.667 & RowLength <= n()%/%1.25, 4,
+                        if_else(RowLength > n()%/%1.25 & RowLength <= n(), 5, 10))))))
+
+#Extracting the mean value of each participant for the positive and negative movement
+options(digits = 8)
+options(max.print=100000)
+
+
+RawDataJerk <- RawData2 %>%
+  pivot_wider(names_from = Measure, values_from = value) %>%
+  mutate(Jerk2 = Acceleration) 
+
+Jerk2 <- diff(RawDataJerk$Jerk2)
+
+RawDataJerk <- RawDataJerk %>%
+  head(-1) 
+
+DataAVJ <- cbind(RawDataJerk, Jerk2)
+colnames(DataAVJ)[ncol(DataAVJ)] <- "Jerk"
+DataAVJ$Jerk2 <- NULL
+
+DataAVJ <- DataAVJ %>% 
+  pivot_longer(c("Acceleration", "Velocity", "Jerk"), names_to = "Measure") 
+
+Neg2 <- filter(DataAVJ, value < 0)
+Pos2 <- filter(DataAVJ, value >= 0)
+
+Final2Neg <- aggregate(Neg2$value, list(Neg2$Participant, Neg2$Trial, Neg2$Task, Neg2$Sensor, Neg2$Measure, Neg2$Time), mean)
+Final2Pos <- aggregate(Pos2$value, list(Pos2$Participant, Pos2$Trial, Pos2$Task, Pos2$Sensor, Pos2$Measure, Pos2$Time), mean)
+
+Final2Neg <- rename(Final2Neg, Participant = Group.1, Trial = Group.2, Task = Group.3, Sensor = Group.4, Measure = Group.5, Time = Group.6, value = x)
+Final2Pos <- rename(Final2Pos, Participant = Group.1, Trial = Group.2, Task = Group.3, Sensor = Group.4, Measure = Group.5, Time = Group.6, value = x)
+
+Final2 <- rbind(Final2Neg, Final2Pos)
+
+Final2 <- Final2 %>% mutate(Trial = if_else(Trial == 6, 1,
+                                            if_else(Trial == 7, 2, 
+                                            if_else(Trial == 8, 3, Trial*1))))
+
+FinalDf <- rbind(Final1, Final2)
+
+FinalDf <- FinalDf %>% mutate(Sign = if_else(value < 0, "N", "P"))
+
+TimesNegativ <- function (x) {ifelse(x < 0, x * -1, x * 1) }
+FinalDf <- FinalDf %>% mutate(value = TimesNegativ(value))
+```
+
+
+```{r}
+DesTask1 <- read_excel("AllDataSets.xlsx", sheet = 3)
+DesTask3 <- read_excel("AllDataSets.xlsx", sheet = 4)
+
+FinalTask1 <- FinalDf %>%
+  filter(Task == 1) %>%
+  arrange(Participant) %>%
+  select(Trial, Participant, Sensor, value, Measure, Trial, Time, Sign, Task) %>%
+  pivot_wider(names_from = c(Sensor, Measure, Sign, Time), values_from = value)
+
+FinalTask3 <- FinalDf %>% 
+  filter(Task == 3) %>%
+  arrange(Participant) %>%
+  select(Trial, Participant, Sensor, value, Measure, Trial, Time, Sign, Task) %>%
+  pivot_wider(names_from = c(Sensor, Measure, Sign, Time), values_from = value)
+
+FinalTask1 <- FinalTask1 %>% mutate(ToT = DesTask1$ToT) %>%
+  mutate(ConWall = DesTask1$ConWall) %>%
+  mutate(Proficiency = DesTask1$Proficiency) %>%
+  mutate(DomHand = DesTask1$DomHand) %>%
+  mutate(TimeWall = DesTask1$TimeWall) 
+
+FinalTask3 <- FinalTask3 %>% mutate(ToT = DesTask3$ToT) %>%
+  mutate(ConWall = DesTask3$ConWall) %>%
+  mutate(Proficiency = DesTask3$Proficiency) %>%
+  mutate(DomHand = DesTask3$DomHand) %>%
+  mutate(TimeWall = DesTask3$TimeWall) 
+  
+FinalDf <- rbind(FinalTask1, FinalTask3)
+
+outcome_vars2 <- FinalDf %>% select(-Trial, -Participant, -ConWall, -TimeWall, -ToT, -Proficiency, -DomHand, -Task) %>% 
+  colnames()
+
+FinalDf <- FinalDf %>% 
+    pivot_longer(outcome_vars2, names_to = "Sensor") %>% 
+      separate(Sensor, into = c("Position", "Axis", "Measure", "Sign", "Time"))
+```
+
+```{r}
+HandLeft <- FinalDf %>% filter(DomHand == "L") %>% filter(Position != "RH" & Position != "RFA" & Position != "RUA")
+
+HandRight <- FinalDf %>% filter(DomHand == "R") %>% filter(Position != "LH" & Position != "LFA" & Position != "LUA")
+
+FinalDf <- rbind(HandLeft, HandRight)
+
+FinalDf <- FinalDf %>% replace(FinalDf == "LH", "Hand") %>%
+  replace(FinalDf == "LFA", "FoArm") %>%
+  replace(FinalDf == "LUA", "UpArm") %>%
+  replace(FinalDf == "RH", "Hand") %>%
+  replace(FinalDf == "RFA", "FoArm") %>%
+  replace(FinalDf =="RUA", "UpArm")
+```
+
+```{r}
+## Run this code to obtain the values for the overall acceleration and velocity 
+MeanSquared <- FinalDf %>% 
+  select(Participant, Trial, Position, Proficiency, Task, Measure, Axis, Sign, Time,value) %>%
+  pivot_wider(names_from = Sign, values_from = value)
+
+MeanSquared <- mutate(MeanSquared, Movement = (P+N)/2) %>% 
+  pivot_longer(c(P,N), names_to = "Sign")
+
+FinalDf <- merge(FinalDf, MeanSquared, by = c("Participant", "Trial", "Position", "Axis", "Proficiency", "Task", "Measure", "Sign",  "Time", "value")) 
+```
+
+```{r}
+FinalDf <- FinalDf %>% group_by(Participant, Trial, Task, Measure, Position, Axis, Sign) %>%
+  mutate(SumValue = mean(value)) %>%
+  mutate(SumMovement = mean(Movement)) %>%
+  mutate(Time = as.numeric(Time)) 
+
+## Movement -> averaged over negative and positive values 
+## SumValue -> averaged over the five sections
+## SumMovement -> averaged over positive and negative values as well as the five sections
+```
+
+```{r}
+write_xlsx(FinalDf, "C:\\Users\\marce\\OneDrive\\Dokumente\\Psychology\\Master Thesis\\Data Master Thesis\\R Scripts\\FinalDf.xlsx")
+```
+
+##FINAL DATASET
+
+```{r}
+D_1 <- read_excel("FinalDf.xlsx") %>%
+  group_by(Participant, Trial, Position, Measure, Task, Time, Sign) %>%
+  mutate(XYZ = mean(value)) %>%
+  mutate(SumXYZ = mean(XYZ)) %>%
+  filter(ToT > 9) 
+  
+ 
+D_2 <- D_1 %>% filter(Time == 1) %>%   ## SumValue without aggregation
+  select(-value, -Time, -SumMovement, -Movement, -XYZ, -SumXYZ) %>%
+  pivot_wider(names_from = Measure, values_from = SumValue) %>%
+  mutate(Velocity = if_else(is.na(Velocity) & Participant == 12, 0.02488166, Velocity)) %>%
+  mutate(Velocity = if_else(is.na(Velocity) & Participant == 17, 0.00502671, Velocity)) %>%
+  mutate(ConWall = as.numeric(ConWall))
+```
+
+```{r}
+saveRDS(M_1, file = "M_1.rds")
+M_1 <- readRDS(file = "M_1.rds")
+```
+
+
+
