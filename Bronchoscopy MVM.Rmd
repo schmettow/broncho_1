@@ -49,7 +49,7 @@ library(patchwork)
 library(gghighlight)
 library(ggradar)
 library(HDInterval)
-library(bbplot)
+#library(bbplot)
 library(xtable)
 library(ggpattern)
 library(scales)
@@ -78,6 +78,23 @@ M_1 <- D_2 %>%
         Jerk = Jerk * 100) %>% 
   brm(bf_Acc + bf_Vel + bf_Jerk + set_rescor(FALSE), data = ., chains = 6, cores = 6, iter = 3000, warmup = 1500, inits = 0)  
 ``` 
+
+```{r} 
+bf_Acc <- bf(Acceleration ~ Proficiency + (PosAxis + Task)) + Gamma(link = log) 
+bf_Vel <- bf(Velocity ~ Proficiency + (PosAxis + Task)) + Gamma(link = log) 
+bf_Jerk <- bf(Jerk ~ Proficiency + (PosAxis + Task)) + Gamma(link = log)
+ 
+M_1A <- D_2 %>% 
+  unite(PosAxis, c(Position, Axis), remove = FALSE) %>% 
+  mutate(PosAxis = factor(PosAxis, levels = c("Hand_X", "Hand_Y", "Hand_Z" , "FoArm_X", "FoArm_Y", "FoArm_Z", "UpArm_X", "UpArm_Y", "UpArm_Z"))) %>%   
+  mutate(Task = as.factor(Task), 
+        Acceleration = Acceleration * 100,         
+        Velocity = Velocity * 100,
+        Jerk = Jerk * 100) %>% 
+  brm(bf_Acc + bf_Vel + bf_Jerk + set_rescor(FALSE), data = ., chains = 6, cores = 6, iter = 3000, warmup = 1500, inits = 0)  
+```
+
+
 
 ```{r}
 posterior_samples <- posterior_samples(M_1)
