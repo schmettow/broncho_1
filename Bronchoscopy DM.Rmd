@@ -60,6 +60,9 @@ devtools::install_github("schmettow/bayr", force = TRUE)
 D1 <- read_excel("Platform validation 2", sheet = 1)
 ```
 
+```{r}
+D_SLR <- read_excel("SLR.xlsx") 
+```
 
 ```{r}
 library(rlang)
