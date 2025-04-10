@@ -9,36 +9,19 @@ format: docx
 library(tidyverse)
 library(readxl)
 library(brms)
-options(mc.cores = 6)
+options(mc.cores = 12)
 library(bayr)
 ```
 
 A series of models with the goal to understand the effect of proficiency on the movement of the arm.
 
 M_1 is the original model. However, this contains conditional effects with high number of levels.
-This is hard to interpret. Models are presented as a stream of thought. M_5 is the final model for now.
+This is hard to interpret. M_9 is the final model for now:
 
-+ a Gamma(log) model is used to have multiplicative effects. This vastly reduces the number of conditional efects needed
-+ Tasks and Positions are collected in a flat factor, which is used as a random effect. After all, the individual positions and tasks don't matter so much and can be expressed in terms of sources of variance (group level sd)
-+ What remains is a unifactorial model, which is easy to interpret.
-
-Interpretation of results:
-+ the IM > Expert > Novice effect is present in all three motion variables
-
-A note on M_6: Here we introduce a random effect for participant. Formally, this is correct and should reduce uncertainty on teh fixed effects, or at least not worsen it. In contrast, all effects become highly uncertain as compared to M_5. One explanation is that teh model is too complex, i.e. no individual differences exist  beyond group membership.
-
-
-
-
-
-
-
-
-
-
-
-
-
++ All three Motion variables are essentially on the same scale, which means we can make it a factor. No multivariate (or separate) model is needed.
++ a Gamma(log) model produces multiplicative effects. This reduces conditional effects and is easier to communicate.
++ Tasks and Positions are collected in a flat factor, which is used as a random effect. After all, the individual positions and tasks don't matter so much and can be expressed in terms of sources of variance (group level sd).
++ What remains is a bifactorial model, which is parsimonous and easy to interpret.
 
 
 ```{r}
@@ -190,10 +173,6 @@ T_5
 
 ```
 
-```{r}
-T_5 |> 
-  ggplot(aes(x = Motion, y = mean))
-```
 
 
 ```{r}
@@ -215,5 +194,77 @@ P_6 <- posterior(M_6)
 P_6 |> 
   filter(type == "fixef") |>
   clu(fn = exp)
+```
+
+```{r}
+#| eval: false
+
+D_7 <- D_6 |> 
+  pivot_longer(cols = c(Velocity, Acceleration, Jerk), 
+             names_to = "Motion", values_to = "value")
+
+M_7 <- brm( bf(value ~ Proficiency * Motion + (1 | Measurement)),
+            data = D_7, chains = 6, cores = 6, iter = 4000, warmup = 2000, 
+            init = 0, family = Gamma(link = "log"))
+
+save(M_7, D_7, file = "M_7.Rda")
+```
+
+```{r}
+load("M_7.Rda")
+summary(M_7)
+```
+
+```{r}
+P_7 <- posterior(M_7)
+
+fixef(P_7, mean.func = exp)
+
+grpef(P_7)
+
+```
+```{r}
+M_8 <- brm( bf(value ~ 0 + (Proficiency : Motion) + (1 | Measurement) + (1 | Participant),
+               shape ~ 0 + Motion),
+            data = D_7, chains = 6, cores = 6, iter = 4000, warmup = 2000, 
+            init = 0, family = Gamma(link = "log"))
+
+save(M_8, D_7, file = "M_8.Rda")
+```
+
+
+```{r}
+
+load("M_8.Rda")
+summary(M_8)
+
+```
+```{r}
+P_8 <- posterior(M_8)
+
+P_8 |> 
+  filter(type == "fixef") |> 
+  coef(mean.func = exp)
+```
+
+```{r}
+fixef(P_8, mean.func = exp)
+
+```
+
+```{r}
+M_9 <- brm( bf(value ~ 1 + Proficiency * Motion + (1 | Measurement) + (1 | Participant),
+               shape ~ 0 + Proficiency + Motion),
+            data = D_7, chains = 6, cores = 6, iter = 3000, warmup = 1000, 
+            init = 0, family = Gamma(link = "log"))
+save(M_9, D_7, file = "M_9.Rda")
+```
+
+```{r}
+load("M_9.Rda")
+summary(M_9)
+```
+```{r}
+fixef(M_9, mean.func = exp)
 ```
 
