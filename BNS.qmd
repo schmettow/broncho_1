@@ -41,8 +41,6 @@ D_3 <- D_2 %>%
   mutate(Velocity = if_else(is.na(Velocity) & Participant == 12, 0.02488166, Velocity)) %>%
   mutate(Velocity = if_else(is.na(Velocity) & Participant == 17, 0.00502671, Velocity)) %>%
   mutate(ConWall = as.numeric(ConWall))
-
-
 ```
 
 ```{r}
@@ -71,7 +69,6 @@ save(M_1, D_4, file = "M_1.Rda")
 load("M_1.Rda")
 
 P_1 <- posterior(M_1)
-
 ```
 
 ```{r}
@@ -79,7 +76,7 @@ P_1 <- posterior(M_1)
 D_5 <- D_4 |> 
   mutate(Measurement = str_c(PosAxis, sep = ":"))
 
-M_2 <- brm(bf(Velocity ~ Proficiency + (1|Measurement)) +
+M_2 <- brm(bf(Velocity ~ Proficiency * Task + (1|Measurement)) +
            bf(Acceleration ~ Proficiency * Task + (1|Measurement)) +
            bf(Jerk ~ Proficiency * Task + (1|Measurement)),
             data = D_5, chains = 6, cores = 6, iter = 4000, warmup = 2000, 
@@ -102,7 +99,7 @@ summary(M_2)
 D_6 <- D_4 |> 
   mutate(Measurement = str_c(PosAxis, Task, sep = ":"))
 
-M_3 <- brm(bf(Velocity ~ Proficiency + (1 + |Measurement)) +
+M_3 <- brm(bf(Velocity ~ Proficiency + (1|Measurement)) +
            bf(Acceleration ~ Proficiency + (1|Measurement)) +
            bf(Jerk ~ Proficiency + (1|Measurement)),
             data = D_6, chains = 6, cores = 6, iter = 4000, warmup = 2000, 
@@ -116,6 +113,7 @@ save(M_3, D_6, file = "M_3.Rda")
 load("M_3.Rda")
 summary(M_3)
 ```
+
 ```{r}
 #| eval: false
 M_4 <- brm(bf(Velocity ~ Proficiency + (1 + Proficiency|Measurement)) +
@@ -146,6 +144,7 @@ save(M_5, D_6, file = "M_5.Rda")
 load("M_5.Rda")
 summary(M_5)
 ```
+
 ```{r}
 P_5 <- posterior(M_5)
 
@@ -174,7 +173,6 @@ T_5
 ```
 
 
-
 ```{r}
 #| eval: false
 M_6 <- brm(bf(Velocity ~ Proficiency + (1 | Measurement) + (1|Participant)) +
@@ -186,6 +184,7 @@ save(M_6, D_6, file = "M_6.Rda")
 ```
 
 ```{r}
+load("M_6.Rda")
 summary(M_6)
 P_6 <- posterior(M_6)
 ```
@@ -223,8 +222,10 @@ fixef(P_7, mean.func = exp)
 grpef(P_7)
 
 ```
+
+
 ```{r}
-M_8 <- brm( bf(value ~ 0 + (Proficiency : Motion) + (1 | Measurement) + (1 | Participant),
+M_8 <- brm( bf(value ~ 0 + (Proficiency : Motion) + (1|Measurement) + (1|Participant),
                shape ~ 0 + Motion),
             data = D_7, chains = 6, cores = 6, iter = 4000, warmup = 2000, 
             init = 0, family = Gamma(link = "log"))
@@ -234,11 +235,10 @@ save(M_8, D_7, file = "M_8.Rda")
 
 
 ```{r}
-
 load("M_8.Rda")
 summary(M_8)
-
 ```
+
 ```{r}
 P_8 <- posterior(M_8)
 
@@ -249,11 +249,10 @@ P_8 |>
 
 ```{r}
 fixef(P_8, mean.func = exp)
-
 ```
 
 ```{r}
-M_9 <- brm( bf(value ~ 1 + Proficiency * Motion + (1 | Measurement) + (1 | Participant),
+M_9 <- brm(bf(value ~ 1 + Proficiency * Motion + (1|Measurement) + (1|Participant),
                shape ~ 0 + Proficiency + Motion),
             data = D_7, chains = 6, cores = 6, iter = 3000, warmup = 1000, 
             init = 0, family = Gamma(link = "log"))
@@ -264,6 +263,7 @@ save(M_9, D_7, file = "M_9.Rda")
 load("M_9.Rda")
 summary(M_9)
 ```
+
 ```{r}
 fixef(M_9, mean.func = exp)
 ```

@@ -315,23 +315,6 @@ finalise_plot(plot_name = Radar,
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 Visual Analysis (Old)
 
 
@@ -379,7 +362,7 @@ make_radar_chart <- function(dframe, Bodypart, Movement, PointSize, LineWidth, M
   
   Radar_Df %>% 
     ggradar(
-      values.radar = c(round(min_radar, digits = Pace) * Mlpl, round( (max_radar+min_radar)/2, digits = Pace) * Mlpl,     round(max_radar, digits = Pace) * Mlpl),
+      values.radar = c(round(min_radar, digits = Pace) * Mlpl, round( (max_radar+min_radar)/2, digits = Pace) * Mlpl, round(max_radar, digits = Pace) * Mlpl),
       grid.min =  min_grid, #round(min, digits = 2),
       grid.mid =  (max_grid + min_grid) / 2, #round( (max+min)/2, digits = 2), 
       grid.max =  max_grid, #round(max, digits = 5) + 0.1,

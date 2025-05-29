@@ -1,0 +1,531 @@
+---
+title: "BNS"
+format: docx
+---
+
+
+
+```{r}
+#| echo: true
+
+library(tidyverse)
+library(readxl)
+library(brms)
+options(mc.cores = 12)
+library(bayr)
+library(broom.mixed)
+```
+
+A series of models with the goal to understand the effect of proficiency on the movement of the arm.
+
+M_1 is the original model. However, this contains conditional effects with high number of levels.
+This is hard to interpret. M_9 is the final model for now:
+
++ All three Motion variables are essentially on the same scale, which means we can make it a factor. No multivariate (or separate) model is needed.
++ a Gamma(log) model produces multiplicative effects. This reduces conditional effects and is easier to communicate.
++ Tasks and Positions are collected in a flat factor, which is used as a random effect. After all, the individual positions and tasks don't matter so much and can be expressed in terms of sources of variance (group level sd).
++ What remains is a bifactorial model, which is parsimonous and easy to interpret.
+
+
+```{r}
+D_1 <- read_excel("FinalDf.xlsx") |> 
+  mutate(Participant = as.factor(Participant))
+
+D_2 <- D_1 |> 
+  group_by(Participant, Trial, Position, Measure, Task, Time, Sign) %>%
+  mutate(XYZ = mean(value)) %>%
+  mutate(SumXYZ = mean(XYZ)) %>%
+  filter(ToT > 9)
+
+D_3 <- D_2 %>% 
+  filter(Time == 1) %>%   ## SumValue without aggregation
+  select(-value, -Time, -SumMovement, -Movement, -XYZ, -SumXYZ) %>%
+  pivot_wider(names_from = Measure, values_from = SumValue) %>%
+  mutate(Velocity = if_else(is.na(Velocity) & Participant == 12, 0.02488166, Velocity)) %>%
+  mutate(Velocity = if_else(is.na(Velocity) & Participant == 17, 0.00502671, Velocity)) %>%
+  mutate(ConWall = as.numeric(ConWall))
+```
+
+```{r}
+#| eval: false
+bf_Acc <- bf(Acceleration ~ Proficiency * (PosAxis + Task)) + exgaussian() 
+bf_Vel <- bf(Velocity ~ Proficiency * (PosAxis + Task)) + exgaussian() 
+bf_Jerk <- bf(Jerk ~ Proficiency * (PosAxis + Task)) + exgaussian() 
+
+D_4 <- D_3 %>% 
+  unite(PosAxis, c(Position, Axis), remove = FALSE) %>% 
+  mutate(PosAxis = factor(PosAxis, levels = c("Hand_X", "Hand_Y", "Hand_Z" , "FoArm_X", "FoArm_Y", "FoArm_Z", "UpArm_X", "UpArm_Y", "UpArm_Z"))) %>%
+  mutate(Task = as.factor(Task),
+        Velocity = Velocity * 100,
+        Acceleration = (Acceleration * 100)^(1/2),      
+        Jerk = (Jerk * 100)^(1/3))
+
+M_1 <-  brm(bf_Acc + bf_Vel + bf_Jerk + set_rescor(FALSE), 
+            data = D_4, chains = 6, cores = 6, iter = 4000, warmup = 2000, 
+            init = 0, family = exgaussian)
+
+save(M_1, D_4, file = "M_1.Rda")
+```
+
+
+```{r}
+load("M_1.Rda")
+
+P_1 <- posterior(M_1)
+```
+
+```{r}
+#| eval: false
+D_5 <- D_4 |> 
+  mutate(Measurement = str_c(PosAxis, sep = ":"))
+
+M_2 <- brm(bf(Velocity ~ Proficiency * Task + (1|Measurement)) +
+           bf(Acceleration ~ Proficiency * Task + (1|Measurement)) +
+           bf(Jerk ~ Proficiency * Task + (1|Measurement)),
+            data = D_5, chains = 6, cores = 6, iter = 4000, warmup = 2000, 
+            init = 0, family = exgaussian)
+
+save(M_2, D_5, file = "M_2.Rda")
+```
+
+
+```{r}
+load("M_2.Rda")
+summary(M_2)
+```
+
+
+
+
+```{r}
+#| eval: false
+D_6 <- D_4 |> 
+  mutate(Measurement = str_c(PosAxis, Task, sep = ":"))
+
+M_3 <- brm(bf(Velocity ~ Proficiency + (1|Measurement)) +
+           bf(Acceleration ~ Proficiency + (1|Measurement)) +
+           bf(Jerk ~ Proficiency + (1|Measurement)),
+            data = D_6, chains = 6, cores = 6, iter = 4000, warmup = 2000, 
+            init = 0, family = exgaussian)    
+
+save(M_3, D_6, file = "M_3.Rda")
+```
+
+
+```{r}
+load("M_3.Rda")
+summary(M_3)
+```
+
+```{r}
+#| eval: false
+M_4 <- brm(bf(Velocity ~ Proficiency + (1 + Proficiency|Measurement)) +
+           bf(Acceleration ~ Proficiency + (1 + Proficiency|Measurement)) +
+           bf(Jerk ~ Proficiency + (1 + Proficiency|Measurement)),
+            data = D_6, chains = 6, cores = 6, iter = 4000, warmup = 2000, 
+            init = 0, family = exgaussian)    
+save(M_4, D_6, file = "M_4.Rda")
+```
+
+```{r}
+load("M_4.Rda")
+summary(M_4)
+```
+
+```{r}
+#| eval: false
+M_5 <- brm(bf(Velocity ~ Proficiency + (1 | Measurement)) +
+           bf(Acceleration ~ Proficiency + (1 | Measurement)) +
+           bf(Jerk ~ Proficiency + (1 | Measurement)),
+            data = D_6, chains = 6, cores = 6, iter = 4000, warmup = 2000, 
+            init = 0, family = Gamma(link = "log"))
+
+save(M_5, D_6, file = "M_5.Rda")
+```
+
+```{r}
+load("M_5.Rda")
+summary(M_5)
+```
+
+```{r}
+P_5 <- posterior(M_5)
+
+clu <- function(x, fn = identity) {
+  x |> 
+    separate(parameter, into = c(NA, "Motion", "Coef"), sep = "_") |> 
+    mutate(value = fn(value)) |> 
+    group_by(type, Motion, Coef) |>
+    summarise(center = median(value), 
+              lower = quantile(value, 0.025),
+              upper = quantile(value, 0.975)) |> 
+    ungroup() |> 
+    mutate(Proficiency = if_else(Coef == "Intercept",
+                                 "Expert (Reference)",
+                                 str_remove(Coef, "Proficiency"))) |> 
+    select(Motion, Proficiency, type, center, lower, upper)
+}
+
+
+T_5 <-
+  P_5 |> 
+  filter(type == "fixef") |> 
+  clu(fn = exp)
+T_5
+
+```
+
+
+```{r}
+#| eval: false
+M_6 <- brm(bf(Velocity ~ Proficiency + (1 | Measurement) + (1|Participant)) +
+           bf(Acceleration ~ Proficiency + (1 | Measurement) + (1|Participant)) +
+           bf(Jerk ~ Proficiency + (1 | Measurement)+ (1|Participant)),
+            data = D_6, chains = 6, cores = 6, iter = 4000, warmup = 2000, 
+            init = 0, family = Gamma(link = "log"))
+save(M_6, D_6, file = "M_6.Rda")
+```
+
+```{r}
+load("M_6.Rda")
+summary(M_6)
+P_6 <- posterior(M_6)
+```
+
+```{r}
+P_6 |> 
+  filter(type == "fixef") |>
+  clu(fn = exp)
+```
+
+```{r}
+#| eval: false
+
+D_7 <- D_6 |> 
+  pivot_longer(cols = c(Velocity, Acceleration, Jerk), 
+             names_to = "Motion", values_to = "value")
+
+M_7 <- brm( bf(value ~ Proficiency * Motion + (1 | Measurement)),
+            data = D_7, chains = 6, cores = 6, iter = 4000, warmup = 2000, 
+            init = 0, family = Gamma(link = "log"))
+
+save(M_7, D_7, file = "M_7.Rda")
+```
+
+```{r}
+load("M_7.Rda")
+summary(M_7)
+```
+
+```{r}
+P_7 <- posterior(M_7)
+
+fixef(P_7, mean.func = exp)
+
+grpef(P_7)
+
+```
+
+
+```{r}
+M_8 <- brm( bf(value ~ 0 + (Proficiency : Motion) + (1|Measurement) + (1|Participant),
+               shape ~ 0 + Motion),
+            data = D_7, chains = 6, cores = 6, iter = 4000, warmup = 2000, 
+            init = 0, family = Gamma(link = "log"))
+
+save(M_8, D_7, file = "M_8.Rda")
+```
+
+
+```{r}
+load("M_8.Rda")
+summary(M_8)
+```
+
+```{r}
+P_8 <- posterior(M_8)
+
+P_8 |> 
+  filter(type == "fixef") |> 
+  coef(mean.func = exp)
+```
+
+```{r}
+fixef(P_8, mean.func = exp)
+```
+
+
+
+##################### New analysis ##########################
+
+
+## Model
+
+```{r}
+M_9 <- brm(bf(value ~ 1 + Proficiency * Motion + (1|Measurement) + (1|Participant),
+               shape ~ 0 + Proficiency + Motion),
+            data = D_7, chains = 6, cores = 6, iter = 3000, warmup = 1000, 
+            init = 0, family = Gamma(link = "log"))
+save(M_9, D_7, file = "M_9.Rda")
+```
+
+```{r}
+saveRDS(M_9, file = "M_9.Rda")
+load("M_9.Rda")
+```
+
+
+#### Data preparation
+
+```{r}
+T_M_9A <- T_M_9 %>% 
+  select(-model, -re_factor, -re_entity, -nonlin) %>%
+  filter(!is.na(fixef))
+
+T_M_9C <- T_M_9A %>% separate(fixef, into = c("Proficiency", "Motion"), sep = ":") %>%
+  mutate(Motion = if_else(str_detect(Proficiency, "Motion"), Proficiency, Motion)) %>%
+  mutate(Motion = if_else(is.na(Motion), "MotionAcceleration", Motion)) %>%
+  mutate(Proficiency = if_else(str_detect(Proficiency, "Motion") | str_detect(Proficiency, "Intercept"), "ProficiencyExpert", Proficiency)) %>%
+  mutate(Motion = gsub("Motion", "", Motion)) %>%
+  mutate(Proficiency = gsub("Proficiency", "", Proficiency)) 
+```
+
+```{r}
+CLU_Motion <- c("center_Acceleration", "center_Jerk", "center_Velocity", "lower_Acceleration", "lower_Jerk", "lower_Velocity", "upper_Acceleration", "upper_Jerk", "upper_Velocity") 
+```
+
+```{r}
+T_M_9C <- T_M_9C %>%
+  pivot_wider(names_from = Motion, values_from = c(center, lower, upper)) %>%
+  mutate(across(center_Jerk:center_Velocity,~.*center_Acceleration)) %>%   
+  mutate(across(lower_Jerk:lower_Velocity,~.*lower_Acceleration)) %>%
+  mutate(across(upper_Jerk:upper_Velocity,~.*upper_Acceleration)) %>%
+  
+  pivot_longer(CLU_Motion, names_to = "Motion") %>%
+  separate(Motion, into = c("CLU", "Motion"), sep = "_") %>%
+  pivot_wider(names_from = Proficiency, values_from = value) %>%
+  mutate(Intermediate = Expert * Intermediate, 
+         Novice = Expert * Novice) %>%
+  pivot_longer(c("Expert", "Intermediate", "Novice"), names_to = "Proficiency") %>%
+  pivot_wider(names_from = CLU, values_from = value)
+```
+
+
+## Visualisation - Fixed effects
+
+```{r}
+T_M_9C %>% ggplot +
+    geom_bar(aes(x=Proficiency, y=center, fill = Proficiency), stat="summary", alpha=0.7) +
+    geom_errorbar(aes(x=Proficiency, ymin=lower, ymax=upper), width=0.4, colour="darkgrey", alpha=0.9, size=1.3) +
+    facet_wrap("Motion", scales = "fixed") +  
+    scale_y_continuous(breaks = scales::pretty_breaks(n = 10)) +
+    xlab("") +
+    ylab("Motion")
+```
+
+
+```{r}
+## The radar chart is not realy that interesting anymore but I plotted it anyway. 
+
+T_M_9D <- T_M_9C %>%  
+  select(Proficiency, Motion, center) 
+  
+max_grid <- max(T_M_9D$center)
+min_grid <- min(T_M_9D$center)
+
+T_M_9D <- T_M_9D %>% pivot_wider(names_from = "Motion", values_from = "center")
+  
+T_M_9D %>% 
+    ggradar(
+      grid.min =  min_grid, #round(min, digits = 2),
+      grid.mid =  (max_grid + min_grid) / 2, #round( (max+min)/2, digits = 2), 
+      grid.max =  max_grid, #round(max, digits = 5) + 0.1,
+      group.point.size = 2, # 3 or 1
+      group.line.width = 0.5, # 0.75 or 0.25
+      gridline.label.offset = 1,
+      gridline.mid.colour = "grey",
+      legend.title = "Proficiency",
+      group.colours = c("brown1", "darkgreen", "blue4"))
+```
+
+
+## Random effects visualisation
+
+
+```{r}
+re_P_M <- tidy(M_9, effects = "ran_vals")
+```
+
+```{r}
+re_P_M %>%
+  filter(group == "Participant") %>%
+  ggplot(aes(x = estimate, y = reorder(level, estimate))) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = estimate - std.error, xmax = estimate + std.error), height = 0.2) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  labs(x = "Random Intercept", y = "Group") +
+  theme_minimal()
+```
+
+```{r}
+re_P_M %>%
+  filter(group == "Measurement") %>%
+  ggplot(aes(x = estimate, y = reorder(level, estimate))) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = estimate - std.error, xmax = estimate + std.error), height = 0.2) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  labs(x = "Random Intercept", y = "Group") +
+  theme_minimal()
+```
+
+## Model comparison M_8 vs M_9 --> M_9 has the better fit
+
+```{r}
+loo_M_8 <- loo(M_8)
+loo_M_9 <- loo(M_9)
+
+list(loo_M_8, loo_M_9) %>%
+  compare_IC()
+```
+
+
+
+################################ Performance variables ##########################################
+
+
+```{r}
+bf_ToT <- bf(ToT | subset(Sub1) ~ Proficiency * Task) + exgaussian()
+
+bf_TimeWall <- bf(TimeWall | subset(Sub1) ~ Proficiency * Task, hu ~ Proficiency)  + hurdle_gamma() 
+### I was thinking of modelling the hu separately for the task but the model did not converge properly.
+
+bf_ConWall <- bf(ConWall | subset(Sub2) ~ Proficiency) + negbinomial() 
+#### Task is not included as the simulator could not record the number of contacts for the second task. 
+
+## I did not add participant random effects here but they could be added of course. 
+
+M_PV <- D_3 %>%
+  group_by(Participant, Task) %>% 
+  mutate(Sub1 = if_else(duplicated(ToT), 0, 1)) %>% 
+  mutate(Sub2 = if_else(duplicated(ConWall) | Task == 3, 0, 1)) %>%   
+   
+  mutate(Task = as.factor(Task),          
+         ConWall = as.numeric(ConWall), 
+         TimeWall = as.numeric(TimeWall)) %>%
+   
+  brm(bf_ToT + bf_ConWall + bf_TimeWall + set_rescor(FALSE), data = ., chains = 6, cores = 6, iter = 4000, warmup = 2000, init = 0, control = list(adapt_delta = 0.8)) 
+
+
+### Short note: The sub function tells the brms engine that the rows labelled with a 1 should be included in the modelling. Otherwise, the brms engine would automatically exclude all the rows in which ONE of the dependent variable is labelled with NA. In other words, since ConWall does not have any values for task 3, the engine would exclude these rows and consequently also exclude the values for TimeWall and ToT which are in the same row.  
+
+##There might be a way to restructure the data set but it works with the sub function too. 
+```
+
+
+```{r}
+saveRDS(M_PV, file = "M_PV.Rds")
+readRDS("M_PV.Rds")
+```
+
+#### Data preparation 
+
+```{r}
+posterior_samples2 <- posterior_samples(M_PV)
+
+median_values2 <- apply(posterior_samples2, 2, median)
+median_table2 <- data.frame(Parameter = names(median_values2), Median = median_values2) 
+rownames(median_table2) <- NULL
+
+
+crebility_values2 <- hdi(posterior_samples2, prob = 0.95)
+crebility_names2 <- colnames(crebility_values2)
+credibility_table2 <- data.frame(Parameter = crebility_names2,
+                     Lower_Bound = crebility_values2[1, ],
+                     Upper_Bound = crebility_values2[2, ])
+rownames(credibility_table2) <- NULL
+```
+
+```{r}
+Estimates <- c("center_Expert", "center_Intermediate", "center_Novice", "lower_Expert", "lower_Intermediate", "lower_Novice", "upper_Expert", "upper_Intermediate", "upper_Novice") 
+ 
+ 
+T_M_PV <- median_table2 %>% left_join(credibility_table2) %>% 
+  mutate(Parameter = if_else(str_detect(Parameter, "hu"), str_remove_all(Parameter, "_TimeWall"), Parameter)) %>%
+  separate(Parameter, into = c("b", "Rest"), sep = "b_") %>%   separate(Rest, into = c("DV", "Rest"), sep = "_") %>% 
+  mutate(Rest = if_else(str_detect(Rest, "Proficiency"), Rest, paste0("ProficiencyExpert:", Rest))) %>% 
+  separate(Rest, into = c("Proficiency", "IV", "Task"), sep = ":") %>%   
+  mutate(Task2 = Task) %>%
+  
+  mutate(Task = if_else(str_detect(IV, "Task3") & !is.na(IV), "T2", "T1")) %>%
+  mutate(IV = if_else(!is.na(Task2), "CenToT", IV)) %>%
+  mutate(IV = if_else(IV == "Task3" | is.na(IV), "Intercept", IV)) %>%  
+  mutate(Proficiency = gsub("Proficiency", "", Proficiency)) %>%   
+  rename(center = Median, lower = Lower_Bound, upper = Upper_Bound) %>%
+  select(DV, Proficiency, IV, Task, center, lower, upper) %>% 
+  mutate(DV = factor(DV, levels = c("ToT", "ConWall", "TimeWall", "hu"))) %>%
+  filter(DV != is.na(DV))
+```
+
+
+```{r}
+T_M_PV <- T_M_PV %>% 
+  pivot_wider(names_from = Proficiency, values_from = c(center, lower, upper)) %>% 
+  mutate(across(center_Intermediate:center_Novice,~.+center_Expert)) %>%   
+  mutate(across(lower_Intermediate:lower_Novice,~.+center_Expert)) %>%   
+  mutate(across(upper_Intermediate:upper_Novice,~.+center_Expert)) %>%   
+  pivot_longer(Estimates, names_to = "Estimate") %>%   
+  separate(Estimate, into = c("Estimate", "Proficiency")) %>%   
+  pivot_wider(names_from = Estimate, values_from = value) %>%   
+  pivot_longer(c(center, lower, upper), names_to = "Estimate") %>%   
+  mutate(value = if_else(DV != "ToT", exp(value), value)) %>%   
+  pivot_wider(names_from = Estimate, values_from = value) 
+```
+
+
+#### Visualisation 
+
+## Time on Task 
+
+```{r}
+T_M_PV %>%
+  filter(DV == "ToT") %>%
+  ggplot +
+    geom_bar(aes(x=Proficiency, y=center), stat="identity", fill="skyblue", alpha=0.7) +
+    geom_errorbar( aes(x=Proficiency, ymin=lower, ymax=upper), width=0.4, colour="grey", alpha=0.9, size=1.3) +
+    facet_wrap(~Task)
+```
+
+
+## TimeWall (Hurdle and hu from the gamma model)
+
+```{r}
+T_M_PV %>%
+  filter(DV == "TimeWall") %>%
+  ggplot +
+    geom_bar(aes(x=Proficiency, y=center, fill = Participant), stat="identity", fill="skyblue", alpha=0.7) +
+    geom_errorbar( aes(x=Proficiency, ymin=lower, ymax=upper), width=0.4, colour="grey", alpha=0.9, size=1.3) +
+    facet_wrap(~Task, scales = "free_y") 
+```
+
+```{r}
+T_M_PV %>%
+  filter(DV == "hu") %>%
+  ggplot +
+    geom_bar(aes(x=Proficiency, y=center, fill = Participant), stat="identity", fill="skyblue", alpha=0.7) +
+    geom_errorbar( aes(x=Proficiency, ymin=lower, ymax=upper), width=0.4, colour="grey", alpha=0.9, size=1.3)
+```
+
+
+## ConWall 
+
+```{r}
+T_M_PV %>%
+  filter(DV == "ConWall") %>%
+  ggplot +
+    geom_bar(aes(x=Proficiency, y=center, fill = Participant), stat="identity", alpha=0.7) +
+    geom_errorbar( aes(x=Proficiency, ymin=lower, ymax=upper), width=0.4, colour="grey", alpha=0.9, size=1.3) 
+```
+
+
+
+

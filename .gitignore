@@ -34,3 +34,7 @@ po/*~
 # RStudio Connect folder
 rsconnect/
 SLR.xlsx
+.Rproj.user
+.Rdata
+.DS_Store
+.quarto
