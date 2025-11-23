@@ -33,8 +33,8 @@ D_1 <- read_excel("FinalDf.xlsx") |>
 
 D_2 <- D_1 |> 
   group_by(Participant, Trial, Position, Measure, Task, Time, Sign) %>%
-  mutate(XYZ = mean(value)) %>%
-  mutate(SumXYZ = mean(XYZ)) %>%
+  mutate(XYZ = mean(value, na.rm = T)) %>%
+  mutate(SumXYZ = mean(XYZ, na.rm = T)) %>%
   filter(ToT > 9)
 
 D_3 <- D_2 %>% 
@@ -264,20 +264,112 @@ fixef(P_8, mean.func = exp)
 ```{r}
 M_9 <- brm(bf(value ~ 1 + Proficiency * Motion + (1|Measurement) + (1|Participant),
                shape ~ 0 + Proficiency + Motion),
-            data = D_7, chains = 6, cores = 6, iter = 3000, warmup = 1000, 
+            data = D_7, chains = 8, cores = 8, iter = 2000, warmup = 1000, 
             init = 0, family = Gamma(link = "log"))
 save(M_9, D_7, file = "M_9.Rda")
 ```
 
 ```{r}
-saveRDS(M_9, file = "M_9.Rda")
 load("M_9.Rda")
+
+P_9 <- posterior(M_9)
+PP_9 <- post_pred(M_9)
+
 ```
+
+```{r}
+fixef_ml(P_9)
+```
+
+
+```{r}
+M_10 <- brm(bf(value ~ 1 + Proficiency * Motion + (1|Measurement) + (0 + Motion|Participant),
+               shape ~ 0 + Proficiency + Motion),
+            data = D_7, chains = 1, cores = 8, iter = 400, warmup = 200, 
+            init = 0, family = Gamma(link = "log"))
+save(M_10, D_7, file = "M_10.Rda")
+```
+
+```{r}
+load("M_10.Rda")
+
+P_10 <- posterior(M_10)
+PP_10 <- post_pred(M_10)
+
+```
+
+```{r}
+fixef_ml(P_10)
+```
+
+```{r}
+
+M_11 <- brm(bf(value ~ 0 + Motion + Proficiency:Motion + (1|Measurement) + (0 + Motion|Participant),
+               shape ~ 0 + Motion),
+            data = D_7, chains = 8, cores = 8, iter = 1000, warmup = 500, 
+            init = 0, family = Gamma(link = "log"))
+save(M_11, D_7, file = "M_11.Rda")
+```
+
+
+
+```{r}
+load("M_11.Rda")
+PP_11 <- post_pred(M_11)
+P_11 <- posterior(M_11) |> 
+  filter(!is.na(fixef))
+```
+
+
+```{r}
+fixef_ml(P_11)
+fixef(P_11, mean.func = exp)
+```
+
+```{r}
+#! caption: "Posterior redicted value M_11"
+
+PP_11 <- PP_11 |> 
+  left_join(D_7 |>  ungroup() |>  mutate(Obs = row_number()) |>
+            select(Obs, Participant, Proficiency, Motion, Measurement, obs_value = value), by = "Obs")
+
+PP_11 |> 
+  ggplot(aes(x = Proficiency, y = value, color = Motion)) +
+    geom_violin() +
+    geom_errorbar(data = T_11_agm, aes(x = Proficiency, col = Motion, y = center, ymin = lower, ymax = upper), width = 0.2)
+```
+
+### Universality analysis
+
+Are the three motion measures related on an individual level? 
+
+
+```{r}
+T_Part <- 
+  PP_11 |> 
+  group_by(Participant, Motion, Proficiency) |> 
+  summarise(center = median(value),
+            lower = quantile(value, 0.025),
+            upper = quantile(value, 0.975)) |>
+  ungroup()
+
+T_Part |>
+  ggplot(aes(x = Motion, y = center, color = Proficiency)) +
+    geom_line(aes(group = Participant)) +
+    geom_point()
+    #geom_jitter(height = 0)
+    #geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.2, alpha = 0.3)
+```
+
+We see mostly parallel lines between accel and velo, indicating that acceleration and jerk are strongly related. The separation by Proficiency is also visible, although all three groups overlap. Velocity does not follow follow the same pattern. Here the separation between intermediates and novices is almost perfect, whereas the experts are very mixed. This explains the relatively large variance on 
+
 
 
 #### Data preparation
 
 ```{r}
+load("M_9.Rda")
+
 T_M_9A <- T_M_9 %>% 
   select(-model, -re_factor, -re_entity, -nonlin) %>%
   filter(!is.na(fixef))
